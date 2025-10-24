@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no" />
-<title>Christmas Pinball – Snowman Flakes & Ice (PC+Mobile Fixed)</title>
+<title>Christmas Pinball – Snowman Flakes & Ice (PC+Mobile Fixed, C-키 데모 토글)</title>
 <style>
   html,body{margin:0;height:100%;background:#0b1120;overflow:hidden}
   #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
   canvas{background:#0b1120;display:block;max-width:100vw;max-height:100vh;touch-action:none}
-  /* 오버레이가 터치를 먹지 않도록 처리 */
+  /* 오버레이가 터치를 가로채지 않도록 처리 */
   .hud,.topright,.errbadge{pointer-events:none}
   .hud{position:fixed;left:12px;bottom:12px;color:#d8f0ff;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;
        background:rgba(255,255,255,.06);border:0;padding:8px 10px;border-radius:8px}
@@ -20,7 +20,7 @@
 </head>
 <body>
 <div id="wrap"><canvas id="game" width="900" height="1600"></canvas></div>
-<div class="hud">Space: 발사 · ←/→: 플리퍼 · R: 리셋 · T: 데모 · 0: 모음 · 1: 리빙룸 · 2: 마을 · 3: 우드</div>
+
 <div class="topright">Skin: <span id="skinlabel">모음(all)</span></div>
 <div class="errbadge" id="err"></div>
 
@@ -266,16 +266,18 @@ addEventListener('keyup',e=>keys.delete(e.code));
 
 /* ================ 모바일/포인터 입력 ================ */
 // 좌/우 플리퍼 "영역" 정의 (근처 누르고 있는 동안만 동작)
-// — 넉넉한 터치 박스로 확대
-const FL_AREA_W = FL_W * 1.0;   // 0.75 → 1.0 (폭 넓힘)
-const FL_AREA_H = 360;          // 280 → 360 (높이 넓힘)
+const FL_AREA_W = FL_W * 1.0;   // 폭 넓힘
+const FL_AREA_H = 360;          // 높이 넓힘
 const flAreaL = { cx: flLx, cy: flY, w: FL_AREA_W, h: FL_AREA_H };
 const flAreaR = { cx: flRx, cy: flY, w: FL_AREA_W, h: FL_AREA_H };
 function inRect(x,y,rc){ return Math.abs(x-rc.cx) <= rc.w/2 && Math.abs(y-rc.cy) <= rc.h/2; }
 
-// SCORE 텍스트 영역(대강의 히트박스)
-let lastScoreTextW = 240; // 초기값 (그려질 때 업데이트)
+// SCORE 텍스트 영역(히트박스)
+let lastScoreTextW = 240; // draw()에서 갱신
 const scoreHitRect = { x:24, y:14, w:() => lastScoreTextW, h:40 };
+
+// 가랜드 "Merry Christmas" 중 'C' 히트박스
+const cHitRect = { x:0, y:0, w:0, h:0, active:false };
 
 // 포인터 관리 (여러 손가락)
 const activePointers = new Map(); // id -> {x,y,side:'L'|'R'|null, downT, moved, startX, startY}
@@ -286,10 +288,8 @@ let demoLatched = false; // 토글 중복 방지
 function viewToCanvas(x,y){ const r = canvas.getBoundingClientRect(); const sx = W / r.width; const sy = H / r.height; return { x:(x - r.left) * sx, y:(y - r.top) * sy }; }
 
 function updateFlipperTouches(){
-  // 현재 activePointers에서 side별 존재 확인
   touchL = false; touchR = false;
   for(const p of activePointers.values()){ if(p.side==='L') touchL=true; if(p.side==='R') touchR=true; }
-  // 데모 길게누름 판정 (좌우를 모두 1초 이상 유지)
   const both = touchL && touchR;
   if(both){ if(demoArmT==null){ demoArmT = performance.now(); demoLatched=false; }
     else { const held = (performance.now()-demoArmT)/1000; if(held>=1.0 && !demoLatched){ demo = !demo; demoLatched = true; ping(92,0.18,1.0); } } }
@@ -297,10 +297,8 @@ function updateFlipperTouches(){
 }
 
 canvas.addEventListener('pointerdown', (e)=>{
-  // 포인터 캡처로 멀티터치 안정화
   canvas.setPointerCapture?.(e.pointerId);
   const {x,y} = viewToCanvas(e.clientX, e.clientY);
-  // pointerdown 시점의 side를 "고정" (롱프레스 중 흔들리지 않도록)
   let side = null;
   if(inRect(x,y,flAreaL)) side = 'L';
   else if(inRect(x,y,flAreaR)) side = 'R';
@@ -312,15 +310,19 @@ canvas.addEventListener('pointermove', (e)=>{
   const p = activePointers.get(e.pointerId); if(!p) return;
   const {x,y} = viewToCanvas(e.clientX, e.clientY); p.x=x; p.y=y;
   if(!p.moved && Math.hypot(x-p.startX, y-p.startY) > 12) p.moved = true;
-  // side는 pointerdown 기준으로 고정. 단, 처음에 null이었고 플리퍼 영역에 들어오면 1회만 설정.
   if(p.side==null){ if(inRect(x,y,flAreaL)) { p.side='L'; updateFlipperTouches(); }
                     else if(inRect(x,y,flAreaR)) { p.side='R'; updateFlipperTouches(); } }
 });
 
+function pointInCHit(x,y){ if(!cHitRect.active) return false; return x>=cHitRect.x && x<=cHitRect.x+cHitRect.w && y>=cHitRect.y && y<=cHitRect.y+cHitRect.h; }
+
 function handleTapOrReleaseActions(p){
   const tapDur = (performance.now() - p.downT)/1000;
-  const isTap = !p.moved && tapDur < 0.35; // 짧은 탭
+  const isTap = !p.moved && tapDur < 0.35; // 짧은 탭만 처리
   if(!isTap) return; // 길게 누름은 플리퍼/데모만 처리
+
+  // 0) 가랜드의 'C' 탭 → 데모 토글
+  if(pointInCHit(p.x,p.y)){ demo = !demo; ping(92,0.18,1.0); return; }
 
   // 1) 상단 대기 중, 별(공) 탭 → 발사
   if(holdAtTop){ if(Math.hypot(p.x - ball.x, p.y - ball.y) <= ball.r*1.4){ launch(); return; } }
@@ -332,8 +334,7 @@ function handleTapOrReleaseActions(p){
   if(!(inRect(p.x,p.y,flAreaL)||inRect(p.x,p.y,flAreaR))){ cycleSkin(); return; }
 }
 
-function endPointer(id){
-  const p = activePointers.get(id); if(!p) return; handleTapOrReleaseActions(p); activePointers.delete(id); updateFlipperTouches(); }
+function endPointer(id){ const p = activePointers.get(id); if(!p) return; handleTapOrReleaseActions(p); activePointers.delete(id); updateFlipperTouches(); }
 
 canvas.addEventListener('pointerup',   (e)=> endPointer(e.pointerId));
 canvas.addEventListener('pointercancel',(e)=> endPointer(e.pointerId));
@@ -421,7 +422,7 @@ function draw(dt){
     else if(g.c===C.red && (redPlainReady||redCakeReady)){ drawBox((redBoxState.mode==='cake'&&redCakeReady)?IMGS.redCake:IMGS.red); }
     else{ ctx.fillStyle="#ffffff22"; rectC(g.x,g.y,gw,gh,6); }
     ctx.restore(); }
-  // Garland
+  // Garland + 'C' 히트박스 산출
   garland();
   // Characters
   drawSantaVideo(); drawRudolphVideo(); drawSnowman();
@@ -442,7 +443,37 @@ function draw(dt){
 }
 
 /* ================ Garland & Helpers ================ */
-function garland(){ const y=240; const startX=0, endX=W; ctx.strokeStyle="rgba(255,255,255,.35)"; ctx.lineWidth=3; ctx.beginPath(); ctx.moveTo(startX, y-18); ctx.quadraticCurveTo(W/2, y+40, endX, y-18); ctx.stroke(); const n=21, pal=SK.bulbPalette||LIGHTS, hz=SK.bulbHz||1.0, tNow=nowSec(); for(let i=0;i<n;i++){ const t=i/(n-1); const px=startX + (endX-startX)*t; const sag = 30 * Math.sin(Math.PI*t); const bulbY = (y-18) + sag; const w=22,h=26; const col=pal[i%pal.length]; ctx.fillStyle=col; ctx.beginPath(); ctx.moveTo(px-w/2,bulbY); ctx.lineTo(px+w/2,bulbY); ctx.lineTo(px,bulbY+h); ctx.closePath(); ctx.fill(); const pulse=0.6+0.4*Math.sin(tNow*(hz*2*Math.PI)+i); glow(px,bulbY+h*0.6,18+4*pulse,col); } ctx.fillStyle=C.gold; ctx.font="bold 64px Georgia,serif"; ctx.textAlign="center"; ctx.fillText("Merry Christmas", W/2, y+70); ctx.textAlign="start"; }
+function garland(){
+  const y=240;
+  const startX=0, endX=W;
+  ctx.strokeStyle="rgba(255,255,255,.35)"; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.moveTo(startX, y-18); ctx.quadraticCurveTo(W/2, y+40, endX, y-18); ctx.stroke();
+  const n=21, pal=SK.bulbPalette||LIGHTS, hz=SK.bulbHz||1.0, tNow=nowSec();
+  for(let i=0;i<n;i++){
+    const t=i/(n-1); const px=startX + (endX-startX)*t; const sag = 30 * Math.sin(Math.PI*t); const bulbY = (y-18) + sag; const w=22,h=26; const col=pal[i%pal.length];
+    ctx.fillStyle=col; ctx.beginPath(); ctx.moveTo(px-w/2,bulbY); ctx.lineTo(px+w/2,bulbY); ctx.lineTo(px,bulbY+h); ctx.closePath(); ctx.fill();
+    const pulse=0.6+0.4*Math.sin(tNow*(hz*2*Math.PI)+i); glow(px,bulbY+h*0.6,18+4*pulse,col);
+  }
+  // 텍스트와 'C' 히트박스 계산
+  const text = "Merry Christmas";
+  ctx.fillStyle=C.gold; ctx.font="bold 64px Georgia,serif"; ctx.textAlign="center";
+  const baseY = y+70; // 기존 위치
+  const mAll = ctx.measureText(text);
+  const leftX = W/2 - (mAll.width/2);
+  const beforeC = "Merry "; // 'C' 앞까지
+  const mBefore = ctx.measureText(beforeC);
+  const mC = ctx.measureText("C");
+  // 실제 텍스트 그리기
+  ctx.fillText(text, W/2, baseY);
+  // 'C' 히트박스(가능하면 실제 ascent/descent 사용)
+  const asc = mC.actualBoundingBoxAscent || 52;
+  const desc = mC.actualBoundingBoxDescent || 12;
+  cHitRect.x = leftX + mBefore.width;
+  cHitRect.y = baseY - asc;
+  cHitRect.w = mC.width;
+  cHitRect.h = asc + desc;
+  cHitRect.active = true;
+}
 function line(x1,y1,x2,y2){ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
 function circ(x,y,r){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();}
 function rectC(cx,cy,w,h,r){const x=cx-w/2,y=cy-h/2; if(!r){ctx.fillRect(x,y,w,h);return;} ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r); ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.fill();}
