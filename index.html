@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Christmas Pinball – Snowman Flakes & Ice (Fixed)</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b1120}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+  canvas{background:#0b1120;display:block;max-width:100vw;max-height:100vh}
+  .hud{position:fixed;left:12px;bottom:12px;color:#d8f0ff;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;
+       background:rgba(255,255,255,.06);border:0;padding:8px 10px;border-radius:8px}
+  .topright{position:fixed;right:12px;top:12px;color:#e6f5ff;font:12px ui-monospace,Menlo,Consolas,monospace;
+       background:rgba(255,255,255,.06);border:0;padding:6px 8px;border-radius:8px}
+  .errbadge{position:fixed;left:12px;top:12px;color:#ffd2d2;font:12px ui-monospace,Menlo,Consolas,monospace;
+       background:rgba(255,80,80,.15);padding:6px 8px;border-radius:8px;max-width:60ch;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="900" height="1600"></canvas></div>
+<div class="hud">Space: 발사 · ←/→: 플리퍼 · R: 리셋 · T: 데모 · 0: 모음 · 1: 리빙룸 · 2: 마을 · 3: 우드</div>
+<div class="topright">Skin: <span id="skinlabel">모음(all)</span></div>
+<div class="errbadge" id="err"></div>
+
+<!-- 배경 스킨 비디오 -->
+<video id="bgvid" src="skin_all.mp4" preload="auto" muted loop playsinline style="display:none"></video>
+<!-- Santa 비디오 (공백 없는 파일명 권장) -->
+<video id="santaVid" src="santa_dance.mp4" preload="auto" muted playsinline style="display:none"></video>
+<!-- Rudolph 비디오 -->
+<video id="rudolphVid" src="rudolph_dance.mp4" preload="auto" muted playsinline style="display:none"></video>
+
+<!-- 배경 음악: 루프 -->
+<audio id="bgm" src="Christmas_Pinball_BGM.mp3" preload="auto" loop></audio>
+
+<script>
+(function(){
+"use strict";
+
+/* ========= 작은 에러 배지(화면을 덮지 않음) ========= */
+const errBox = document.getElementById('err');
+function showErr(msg){ try{ errBox.textContent = String(msg).slice(0,500); }catch(_){} }
+window.addEventListener('error', e => { showErr("JS Error: " + (e && e.message)); });
+window.addEventListener('unhandledrejection', e => { showErr("Promise Rejection: " + (e && e.reason && e.reason.message || e.reason)); });
+
+/* ================ Canvas / Fit ================ */
+const W=900,H=1600;
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+function fit(){const s=Math.min(innerWidth/W,innerHeight/H);canvas.style.width=W*s+'px';canvas.style.height=H*s+'px';}
+addEventListener('resize',fit); fit();
+
+/* ================ Palette ================ */
+const C={ base:"#0b1120", rail:"#2a3858", white:"#ffffff", red:"#ff4b4b", green:"#1fd188",
+gold:"#ffd766", blue:"#66d0ff", purple:"#b266ff", pink:"#ff8ed1", cream:"#ffe0c0",
+dark:"#24313a", wood:"#8b5a2b" };
+const LIGHTS=[C.red,C.gold,C.green,C.blue,C.purple,C.pink];
+
+/* ================ Skin (UI 팔레트) ================ */
+const SKINS = {
+  village: {
+    name: "크리스마스 마을",
+    bg: "#0b1120",
+    rail: "#2a3858",
+    railGlow: "#B3E5FF",
+    railGlowAlpha: 0.10,
+    snowAlpha: 0.30,
+    bulbPalette: ["#E6F5FF","#B3E5FF","#FFD766"],
+    bulbHz: 1.0,
+    sparkColors: ["#FFD766","#E6F5FF"],
+    sparkLifeMul: 0.95,
+    scoreFont: "bold 36px Georgia,serif",
+    helpFont: "14px ui-monospace,Menlo,Consolas",
+    sndDurMul: 1.15,
+    sndVolMul: 1.0
+  }
+};
+let SK = SKINS.village;
+let SND_DUR_MUL = SK.sndDurMul;
+let SND_VOL_MUL = SK.sndVolMul;
+function setSkin(id){
+  SK = SKINS[id]||SKINS.village;
+  SND_DUR_MUL = SK.sndDurMul; SND_VOL_MUL = SK.sndVolMul;
+}
+
+/* ================ Background Video (스킨 전환) ================ */
+const BG_VID = document.getElementById('bgvid');
+let vidReady = false;
+
+const VIDEO_SKINS = {
+  all:        { file: "skin_all.mp4",        label: "모음(all)" },
+  livingroom: { file: "skin_livingroom.mp4", label: "리빙룸(livingroom)" },
+  village:    { file: "skin_village.mp4",    label: "마을(village)" },
+  wood:       { file: "skin_wood.mp4",       label: "우드(wood)" }
+};
+function setVideoSkin(which){
+  const v = VIDEO_SKINS[which] || VIDEO_SKINS.all;
+  vidReady = false;
+  try{ BG_VID.pause(); }catch(e){}
+  BG_VID.src = v.file;
+  BG_VID.muted = true;
+  BG_VID.load();
+  const el=document.getElementById('skinlabel');
+  if(el) el.textContent = v.label;
+}
+BG_VID.addEventListener('canplay', () => {
+  vidReady = true;
+  try { BG_VID.play(); } catch(e) {}
+});
+function ensureVideoPlay(){
+  if(!vidReady) return;
+  if(BG_VID.paused){
+    BG_VID.muted = true;
+    BG_VID.play().catch(()=>{});
+  }
+}
+addEventListener('pointerdown', ensureVideoPlay);
+addEventListener('keydown', ensureVideoPlay);
+setVideoSkin('all'); // 시작 기본 스킨
+
+/* ================ 오디오: BGM + 효과음 분리 ================ */
+let audioReady=false, audioCtx=null, masterG=null;
+const bgmEl = document.getElementById('bgm');
+bgmEl.loop = true;
+bgmEl.volume = 0.20;
+let triedPlay = false;
+
+function bootAudio(){ 
+  if(!audioReady){
+    try{
+      audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+      masterG=audioCtx.createGain(); 
+      masterG.gain.value=0.18;
+      masterG.connect(audioCtx.destination);
+      audioReady=true;
+    }catch(e){ showErr("AudioContext 실패: " + e.message); }
+  }
+  if(!triedPlay){
+    triedPlay = true;
+    bgmEl.play().catch(()=>{ triedPlay=false; });
+  }
+}
+addEventListener('pointerdown',bootAudio);
+addEventListener('keydown',bootAudio);
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='visible'){
+    if(audioCtx && audioCtx.state==='suspended'){ audioCtx.resume().catch(()=>{}); }
+    if(bgmEl.paused){ bgmEl.play().catch(()=>{}); }
+  }
+});
+function ping(note=80,dur=0.22,vol=1){
+  if(!audioReady) return;
+  try{
+    const now=audioCtx.currentTime;
+    const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+    o.type='sine'; o.frequency.value=440*Math.pow(2,(note-69)/12);
+    g.gain.setValueAtTime(0.0001,now);
+    g.gain.exponentialRampToValueAtTime(0.55*(vol*SND_VOL_MUL), now+0.01);
+    const D=dur*SND_DUR_MUL;
+    g.gain.exponentialRampToValueAtTime(0.0001, now+D);
+    o.connect(g); g.connect(masterG); o.start(now); o.stop(now+D);
+  }catch(e){ showErr("ping 오류: " + e.message); }
+}
+
+/* ================ Utils ================ */
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const reflect=(vx,vy,nx,ny,e)=>{const d=vx*nx+vy*ny;return [vx-(1+e)*d*nx,vy-(1+e)*d*ny];}
+const rnd=(a,b)=>a+Math.random()*(b-a), pick=a=>a[(Math.random()*a.length)|0];
+const nowSec=()=>performance.now()/1000;
+
+/* ================ World & Objects ================ */
+const bounds={x:20,y:20,w:W-40,h:H-40,r:40};
+const BALL_R=18;
+const ball={x:W-200,y:H-280,vx:10,vy:-36,r:BALL_R};
+
+const FL_W=300, FL_H=22, GAP=42;
+const flY=H-140, flLx=W/2-(FL_W+GAP)/2, flRx=W/2+(FL_W+GAP)/2;
+const mkFlip=(cx,dir)=>({cx,cy:flY,w:FL_W,h:FL_H,angle:0,rest:0,up:(dir>0?25:-25)*Math.PI/180});
+const flipL=mkFlip(flLx,-1), flipR=mkFlip(flRx,1);
+
+const gLeft ={x:bounds.x+6, y:H-360, x2:flLx+FL_W*0.18, y2:H-200, th:20};
+gLeft.x1=gLeft.x; gLeft.y1=gLeft.y;
+const gRight={x:bounds.x+bounds.w-6, y:H-360, x2:flRx-FL_W*0.18, y2:H-200, th:20};
+gRight.x1=gRight.x; gRight.y1=gRight.y;
+
+const bumpers=[
+  {x:W-260,y:300,r:36,c:C.blue,k:0,n:72},
+  {x:W-380,y:420,r:36,c:C.purple,k:0,n:74},
+  {x:W-140,y:440,r:36,c:C.pink,k:0,n:76},
+  {x:160,y:820,r:30,c:C.gold,k:0,n:79}
+];
+
+/* gifts */
+const gifts=[
+  {x:W-220,y:620,w:64,h:50,p:0,hb:false,c:C.red,  n:83, s:4.2},
+  {x:W-340,y:700,w:64,h:50,p:0,hb:false,c:C.gold, n:79, s:4.2},
+  {x:W-120,y:760,w:64,h:50,p:0,hb:false,c:C.blue, n:76, s:4.2}
+];
+
+/* ============ Characters ============ */
+const santa={ x:710,y:980,w:150,h:230,p:0,rot:0,rv:0,spin:0.012,damp:0.985, n:77,
+  imgReady:false,imgW:150,imgH:230, videoReady:false, playing:false, wantPlay:false };
+const rudolph={ x:300, y:520, w:150, h:230, p:0, rot:0, rv:0, spin:0.03, damp:0.986, n:79,
+  imgReady:false, imgW:150, imgH:230, videoReady:false, playing:false, wantPlay:false };
+const snow={ x:200,y:1080,p:0,body:56,head:44,rot:0,rv:0,spin:0.02,damp:0.985,n:81,
+  imgReady:false,imgW:110,imgH:180 };
+
+/* ================ Images ================ */
+const IMGS={
+  snowman:new Image(), rudolph:new Image(), santa:new Image(),
+  bluePlain:new Image(), blueBear:new Image(),
+  yellow:new Image(), yellowRobot:new Image(),
+  red:new Image(), redCake:new Image()
+};
+function safeDrawImage(img, x, y, w, h){
+  const iw = img && (img.naturalWidth||img.width||0);
+  const ih = img && (img.naturalHeight||img.height||0);
+  if(!iw || !ih) return false;
+  try{ ctx.drawImage(img, x, y, w, h); return true; }catch(e){return false;}
+}
+IMGS.snowman.onload=function(){
+  snow.imgReady=true;
+  const iw=this.naturalWidth||this.width||1, ih=this.naturalHeight||this.height||1;
+  const targetH=150; snow.imgH=targetH; snow.imgW=Math.max(1,Math.round(iw*(targetH/ih)));
+};
+IMGS.snowman.onerror=()=>{ snow.imgReady=false; };
+IMGS.snowman.src="snowman.png";
+
+IMGS.rudolph.onload=function(){
+  rudolph.imgReady=true;
+  const iw=this.naturalWidth||this.width||1, ih=this.naturalHeight||this.height||1;
+  const targetH = 150;
+  rudolph.imgH = targetH; rudolph.imgW = Math.max(1, Math.round(iw*(targetH/ih)));
+};
+IMGS.rudolph.onerror=()=>{ rudolph.imgReady=false; };
+IMGS.rudolph.src="rudolph.png";
+
+IMGS.santa.onload=()=>{ santa.imgReady=true; };
+IMGS.santa.onerror=()=>{ santa.imgReady=false; };
+IMGS.santa.src="santa.png";
+
+/* Box images */
+let bluePlainReady=false, blueBearReady=false;
+IMGS.bluePlain.onload=()=>{ bluePlainReady=true; };
+IMGS.bluePlain.onerror=()=>{ bluePlainReady=false; };
+IMGS.bluePlain.src="blue box.png";
+IMGS.blueBear.onload=()=>{ blueBearReady=true; };
+IMGS.blueBear.onerror=()=>{ blueBearReady=false; };
+IMGS.blueBear.src="blue box1.png";
+let yellowPlainReady=false, yellowRobotReady=false;
+IMGS.yellow.onload=()=>{ yellowPlainReady=true; };
+IMGS.yellow.onerror=()=>{ yellowPlainReady=false; };
+IMGS.yellow.src="yellow box.png";
+IMGS.yellowRobot.onload=()=>{ yellowRobotReady=true; };
+IMGS.yellowRobot.onerror=()=>{ yellowRobotReady=false; };
+IMGS.yellowRobot.src="yellow box1.png";
+let redPlainReady=false, redCakeReady=false;
+IMGS.red.onload=()=>{ redPlainReady=true; };
+IMGS.red.onerror=()=>{ redPlainReady=false; };
+IMGS.red.src="red box.png";
+IMGS.redCake.onload=()=>{ redCakeReady=true; };
+IMGS.redCake.onerror=()=>{ redCakeReady=false; };
+IMGS.redCake.src="red box1.png";
+
+/* Box states */
+const yellowBoxState={ mode:'plain', plainHits:0, robotHits:0 };
+const blueBoxState  ={ mode:'plain', plainHits:0, bearHits:0 };
+const redBoxState   ={ mode:'plain', plainHits:0, cakeHits:0 };
+
+/* ================ Rollovers ================ */
+const roll=[
+  {x:(gLeft.x1+gLeft.x2)/2,  y:(gLeft.y1+gLeft.y2)/2,  h:false, n:95},
+  {x:(gRight.x1+gRight.x2)/2, y:(gRight.y1+gRight.y2)/2, h:false, n:97}
+];
+
+/* ================ Input / Demo ================ */
+let score=0, keys=new Set(), demo=false, aiL=false, aiR=false, holdL=0, holdR=0;
+
+/* ================ Sparks & Flakes ================ */
+const sparks=[];
+function burst(x,y,n=24,pow=240){
+  const lifeMul=SK.sparkLifeMul||1.0;
+  const sc=(SK.sparkColors&&SK.sparkColors.length)?SK.sparkColors:LIGHTS;
+  for(let i=0;i<n;i++){
+    sparks.push({x,y,
+      vx:Math.cos(i/n*2*Math.PI+rnd(0,.2))*rnd(.8,pow/100),
+      vy:Math.sin(i/n*2*Math.PI+rnd(0,.2))*rnd(.8,pow/100),
+      age:0,life:rnd(.4,.9)*lifeMul,size:rnd(2,4),c:pick(sc),shape:"glow"});
+  }
+}
+function burstHit(x=ball.x, y=ball.y, n=22, pow=240){
+  const lifeMul=0.9*(SK.sparkLifeMul||1.0);
+  const cols=["#FFD766","#FFE680","#FFF1B3"];
+  for(let i=0;i<n;i++){
+    const ang=i/n*2*Math.PI + rnd(-0.2,0.2);
+    const spd=rnd(.8,pow/100);
+    sparks.push({x,y, vx:Math.cos(ang)*spd, vy:Math.sin(ang)*spd,
+      age:0, life:rnd(.45,.85)*lifeMul, size:rnd(3,5),
+      c:pick(cols), shape:"star", rot:rnd(0,Math.PI*2), rv:rnd(-3,3)});
+  }
+}
+function spawnFlake(x,y,v=140,life=1.1,opts){
+  opts=opts||{};
+  const dir = (opts.dirAng!=null)?opts.dirAng:rnd(0,Math.PI*2);
+  const sp = v/100*rnd(0.6,1.2);
+  const sr = opts.startR||0;
+  const dx = Math.cos(dir), dy=Math.sin(dir);
+  const drift = opts.driftAcc||0;
+  sparks.push({
+    x: x + dx*sr,
+    y: y + dy*sr,
+    vx: dx*sp, vy: dy*sp,
+    ax: dx*drift, ay: dy*drift,
+    age:0, life:rnd(life*0.8,life*1.3),
+    size:rnd(2,3.2), c:"#FFFFFF", shape:"flake",
+    rot:rnd(0,Math.PI*2), rv:rnd(-6,6)
+  });
+}
+
+/* ================ Snow BG Layer (particles) ================ */
+const snowflakes=Array.from({length:120},(_,i)=>({x:(i*57)%W,y:(i*101)%H,r:(i%3)+1,v:10+(i%5)}));
+
+/* ================ Stuck & Trail & Ice ================ */
+const STUCK_RADIUS=26, STUCK_TIME=0.4, ESCAPE_DUR=0.6, ESCAPE_IMPULSE=34;
+const TRAIL_CAP=28, TRAIL_BASE_FADE=0.75, TRAIL_FADE_ESCAPE=2.6;
+const BALL_ALPHA_MAX=0.40, TRAIL_ALPHA_MAX=0.38;
+
+let stuckOrigin={x:ball.x,y:ball.y};
+let stuckStartT=nowSec();
+let ballAlpha=1;
+let escapeUntil=0;
+const trail=[];
+
+/* 얼음 효과 */
+let iceUntil=0;
+const ICE_DUR=4.2;
+const ICE_DRAG=5.8;
+function inIce(){ return nowSec() < iceUntil; }
+function inEscape(){ return nowSec() < escapeUntil; }
+
+/* 상단 대기 상태 */
+let holdAtTop = false;
+
+/* ================ Santa Dance Video ================ */
+const SANTA_VID = document.getElementById('santaVid');
+SANTA_VID.loop = true;
+SANTA_VID.preload = "auto";
+SANTA_VID.muted = true;
+SANTA_VID.playsInline = true;
+SANTA_VID.addEventListener('loadeddata', ()=>{ santa.videoReady = true; });
+SANTA_VID.addEventListener('error', ()=>{ santa.videoReady = false; });
+function ensureSantaPlay(){ if(santa.wantPlay && santa.videoReady){ santaPlay(); } }
+addEventListener('pointerdown', ensureSantaPlay);
+addEventListener('keydown', ensureSantaPlay);
+function santaPlay(){ if(!santa.videoReady){ santa.wantPlay = true; return; }
+  SANTA_VID.play().then(()=>{ santa.playing=true; santa.wantPlay=false; }).catch(()=>{ santa.wantPlay=true; }); }
+function santaPause(){ try{ SANTA_VID.pause(); }catch(e){} santa.playing=false; }
+
+/* ================ Rudolph Dance Video ================ */
+const RUDOLPH_VID = document.getElementById('rudolphVid');
+RUDOLPH_VID.loop = true;
+RUDOLPH_VID.preload = "auto";
+RUDOLPH_VID.muted = true;
+RUDOLPH_VID.playsInline = true;
+RUDOLPH_VID.addEventListener('loadeddata', ()=>{ rudolph.videoReady = true; });
+RUDOLPH_VID.addEventListener('error', ()=>{ rudolph.videoReady = false; });
+function ensureRudolphPlay(){ if(rudolph.wantPlay && rudolph.videoReady){ rudolphPlay(); } }
+addEventListener('pointerdown', ensureRudolphPlay);
+addEventListener('keydown', ensureRudolphPlay);
+function rudolphPlay(){ if(!rudolph.videoReady){ rudolph.wantPlay = true; return; }
+  RUDOLPH_VID.play().then(()=>{ rudolph.playing = true; rudolph.wantPlay = false; }).catch(()=>{ rudolph.wantPlay = true; }); }
+function rudolphPause(){ try{ RUDOLPH_VID.pause(); }catch(e){} rudolph.playing = false; }
+
+/* ================ Input ================ */
+addEventListener('keydown',e=>{
+  if(['ArrowLeft','ArrowRight','Space','KeyR','KeyT','Digit0','Digit1','Digit2','Digit3'].includes(e.code)) e.preventDefault();
+  keys.add(e.code);
+  if(e.code==='Space') launch();
+  if(e.code==='KeyR') reset();
+  if(e.code==='KeyT'){ demo=!demo; if(demo && !holdAtTop && speed()<1.2) launch(); }
+  if(e.code==='Digit0') setVideoSkin('all');
+  if(e.code==='Digit1') setVideoSkin('livingroom');
+  if(e.code==='Digit2') setVideoSkin('village');
+  if(e.code==='Digit3') setVideoSkin('wood');
+});
+addEventListener('keyup',e=>keys.delete(e.code));
+
+/* ================ Helpers ================ */
+function speed(){return Math.hypot(ball.vx,ball.vy);}
+function stuckReset(hard){
+  hard=!!hard;
+  stuckOrigin.x=ball.x; stuckOrigin.y=ball.y;
+  stuckStartT=nowSec();
+  if(hard){ ballAlpha=1; escapeUntil=0; }
+}
+function startEscape(){
+  ballAlpha=0.5;
+  let vx=ball.vx, vy=ball.vy, s=Math.hypot(vx,vy);
+  if(s<6){ vx=0; vy=-1; s=1; }
+  vx/=s; vy/=s;
+  ball.vx=vx*ESCAPE_IMPULSE; ball.vy=vy*ESCAPE_IMPULSE;
+  escapeUntil=nowSec()+ESCAPE_DUR;
+  burst(ball.x,ball.y,36,320);
+  stuckReset(false);
+}
+
+/* ================ Collision helpers ================ */
+function hitCircle(x,y,r){
+  if(inEscape()) return false;
+  const dx=ball.x-x, dy=ball.y-y, d=Math.hypot(dx,dy);
+  if(d<ball.r+r){
+    const nx=dx/(d||1), ny=dy/(d||1), pen=ball.r+r-d;
+    ball.x+=nx*pen; ball.y+=ny*pen;
+    const ref=reflect(ball.vx,ball.vy,nx,ny,0.92);
+    ball.vx=ref[0]; ball.vy=ref[1];
+    return true;
+  }
+  return false;
+}
+function hitSeg(x1,y1,x2,y2,t){
+  if(inEscape()) return false;
+  t = (t==null)?10:t;
+  const vx=x2-x1, vy=y2-y1, wx=ball.x-x1, wy=ball.y-y1, v2=vx*vx+vy*vy;
+  const s=Math.max(0,Math.min(1,(wx*vx+wy*vy)/(v2||1)));
+  const px=x1+s*vx, py=y1+s*vy;
+  const dx=ball.x-px, dy=ball.y-py, R=ball.r+t/2;
+  if(dx*dx+dy*dy<R*R){
+    const d=Math.hypot(dx,dy)||1, nx=dx/d, ny=dy/d, pen=R-d;
+    ball.x+=nx*pen; ball.y+=ny*pen;
+    const ref=reflect(ball.vx,ball.vy,nx,ny,0.86);
+    ball.vx=ref[0]; ball.vy=ref[1];
+    return true;
+  }
+  return false;
+}
+
+/* ================ Game actions ================ */
+function launch(){
+  if(holdAtTop){
+    ball.vx = rnd(-14,14);
+    ball.vy = 36;
+    holdAtTop = false;
+    burst(ball.x,ball.y,22,260);
+    return;
+  }
+  ball.x=W-200; ball.y=H-280; ball.vx=10; ball.vy=-36;
+  burst(ball.x,ball.y,22,220);
+  ping(79,.18); ping(83,.18,.9);
+}
+function reset(){
+  score=0; gifts.forEach(g=>{g.hb=false;g.p=0}); roll.forEach(r=>r.h=false);
+  sparks.length=0; trail.length=0;
+
+  santa.rot=santa.rv=0; santa.p=0; santaPause(); santa.wantPlay=false;
+  rudolph.rot=rudolph.rv=0; rudolph.p=0; rudolphPause(); rudolph.wantPlay=false;
+  snow.rot=snow.rv=0;
+
+  stuckReset(true); ballAlpha=1; escapeUntil=0; iceUntil=0;
+  ball.x = W/2; ball.y = 90; ball.vx = 0; ball.vy = 0;
+  holdAtTop = true;
+
+  yellowBoxState.mode='plain'; yellowBoxState.plainHits=0; yellowBoxState.robotHits=0;
+  blueBoxState.mode='plain'; blueBoxState.plainHits=0; blueBoxState.bearHits=0;
+  redBoxState.mode='plain'; redBoxState.plainHits=0; redBoxState.cakeHits=0;
+
+  ping(72,.16); ping(76,.16); ping(79,.16);
+}
+
+/* ================ Loop ================ */
+let last=performance.now();
+requestAnimationFrame(tick);
+function tick(ts){
+  const dt=Math.min(.033,(ts-last)/1000); last=ts;
+
+  // Demo AI
+  if(demo && !holdAtTop){
+    if(holdL>0) holdL--; if(holdR>0) holdR--;
+    if(holdL===0) aiL=false; if(holdR===0) aiR=false;
+    const vy=ball.vy, vx=ball.vx, near=H-300, zone=H-160;
+    if(vy>0 && ball.y>near){
+      const tt=(zone-ball.y)/(vy||1), px=ball.x+vx*tt;
+      const L=[flLx-FL_W*0.55, flLx+FL_W*0.55], R=[flRx-FL_W*0.55, flRx+FL_W*0.55];
+      if(px>L[0]&&px<L[1]){aiL=true;holdL=10;}
+      if(px>R[0]&&px<R[1]){aiR=true;holdR=10;}
+    }
+    if(speed()<.4) launch();
+  }
+
+  // Integrate
+  if(!holdAtTop){
+    ball.vy+=0.6;
+    ball.vx*=(1-0.002); ball.vy*=(1-0.002);
+    if(inIce()){ const f=Math.exp(-ICE_DRAG*dt); ball.vx*=f; ball.vy*=f; }
+    ball.x+=ball.vx; ball.y+=ball.vy;
+  }
+
+  // Walls
+  if(!inEscape() && !holdAtTop){
+    if(ball.x-ball.r<bounds.x){ball.x=bounds.x+ball.r; ball.vx=Math.abs(ball.vx)*.9; ping(72,.15,.7); burstHit(ball.x,ball.y,20,220);}
+    if(ball.x+ball.r>bounds.x+bounds.w){ball.x=bounds.x+bounds.w-ball.r; ball.vx=-Math.abs(ball.vx)*.9; ping(74,.15,.7); burstHit(ball.x,ball.y,20,220);}
+    if(ball.y-ball.r<bounds.y){ball.y=bounds.y+ball.r; ball.vy=Math.abs(ball.vy)*.9; ping(76,.15,.7); burstHit(ball.x,ball.y,20,220);}
+  }else if(inEscape()){
+    if(ball.x-ball.r<bounds.x){ball.x=bounds.x+ball.r;}
+    if(ball.x+ball.r>bounds.x+bounds.w){ball.x=bounds.x+bounds.w-ball.r;}
+    if(ball.y-ball.r<bounds.y){ball.y=bounds.y+ball.r;}
+  }
+
+  // Drain auto-restart
+  const gap=GAP/2+BALL_R+6;
+  if(!holdAtTop && ((ball.vy>0 && ball.y>H-110 && Math.abs(ball.x-W/2)<gap) || ball.y>H-40)){
+    launch();
+  }
+
+  // Guides
+  if(!holdAtTop){
+    const gL=hitSeg(gLeft.x1,gLeft.y1,gLeft.x2,gLeft.y2,gLeft.th);
+    const gR=hitSeg(gRight.x1,gRight.y1,gRight.x2,gRight.y2,gRight.th);
+    if(gL) burstHit(ball.x,ball.y,16,200);
+    if(gR) burstHit(ball.x,ball.y,16,200);
+  }
+
+  // Flippers
+  const useL = (!holdAtTop && (keys.has('ArrowLeft') || (demo && aiL)));
+  const useR = (!holdAtTop && (keys.has('ArrowRight')|| (demo && aiR)));
+  flipL.angle += ((useL?flipL.up:flipL.rest)-flipL.angle)*0.4;
+  flipR.angle += ((useR?flipR.up:flipR.rest)-flipR.angle)*0.4;
+
+  function flipperHitSafe(f,active){
+    if(inEscape() || holdAtTop) return;
+    const c=Math.cos(f.angle), s=Math.sin(f.angle);
+    const dx=ball.x-f.cx, dy=ball.y-f.cy;
+    const lx=c*dx + s*dy, ly=-s*dx + c*dy;
+    const hw=f.w/2, hh=f.h/2;
+    if(lx>-hw-ball.r && lx<hw+ball.r && ly>-hh-ball.r && ly<hh+ball.r){
+      const px=clamp(lx,-hw,hw), py=clamp(ly,-hh,hh);
+      let nx=lx-px, ny=ly-py, d=Math.hypot(nx,ny); if(d===0){nx=0;ny=(ly>0?1:-1);d=1}else{nx/=d;ny/=d}
+      const gvx=c*ball.vx - s*ball.vy, gvy=s*ball.vx + c*ball.vy;
+      const ref=reflect(gvx,gvy,nx,ny,0.9);
+
+      const impBase = active ? 36 : 6;
+      const iceBoost = inIce() ? 2.0 : 1.0;
+      const imp = impBase * iceBoost;
+
+      const nvx = ref[0] + nx*imp, nvy = ref[1] + ny*imp;
+      ball.vx = c*nvx - s*nvy; 
+      ball.vy = s*nvx + c*nvy;
+
+      const wx=(c*px - s*py)+f.cx, wy=(s*px + c*py)+f.cy;
+      const nxw=c*nx - s*ny, nyw=s*nx + c*ny;
+      ball.x=wx+nxw*(ball.r+1); ball.y=wy+nyw*(ball.r+1);
+      ping(active?96:86,.16,active?1:0.8);
+      burstHit(ball.x,ball.y,18,240);
+    }
+  }
+  flipperHitSafe(flipL,useL); flipperHitSafe(flipR,useR);
+
+  // Bumpers
+  if(!holdAtTop){
+    bumpers.forEach(b=>{
+      if(hitCircle(b.x,b.y,b.r)){
+        b.k=1; score+=500; ping(b.n,.18); burstHit(ball.x,ball.y,18,220);
+        const N = 12, R = b.r + 20, DRIFT = 300, PIECES = 26;
+        for(let j=0;j<N;j++){
+          const a0 = (j/N)*Math.PI*2;
+          const cx = b.x + Math.cos(a0)*R;
+          const cy = b.y + Math.sin(a0)*R;
+          const ox = cx - b.x, oy = cy - b.y, od = Math.hypot(ox, oy) || 1;
+          const ax = (ox/od) * DRIFT, ay = (oy/od) * DRIFT;
+          for(let i=0;i<PIECES;i++){
+            const ang = i/PIECES*2*Math.PI + rnd(-0.12, 0.12);
+            const spd = rnd(2.2, 4.2);
+            sparks.push({x:cx,y:cy,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,ax,ay,age:0,life:rnd(0.8,1.3),size:rnd(3.5,6.0),c:b.c,shape:"star",rot:rnd(0,Math.PI*2),rv:rnd(-4,4)});
+            sparks.push({x:cx,y:cy,vx:Math.cos(ang)*spd*0.6,vy:Math.sin(ang)*spd*0.6,ax,ay,age:0,life:rnd(0.45,0.75),size:rnd(2.5,4.0),c:b.c,shape:"glow"});
+          }
+        }
+      }
+      b.k*=.9;
+    });
+  }
+
+  // Gifts
+  if(!holdAtTop){
+    gifts.forEach(g=>{
+      const s=(g.s||1);
+      const gw=g.w*s, gh=g.h*s;
+      const nx=clamp(ball.x,g.x-gw/2,g.x+gw/2), ny=clamp(ball.y,g.y-gh/2,g.y+gh/2);
+      const dx=ball.x-nx, dy=ball.y-ny;
+      if(!g.hb && dx*dx+dy*dy<(BALL_R+6)*(BALL_R+6)){
+        g.hb=true; g.p=1; score+=800; ping(g.n,.2); ping(g.n+4,.18,.85); burstHit(g.x,g.y,20,230);
+
+        if(g.c===C.gold){
+          if(yellowBoxState.mode==='plain'){ yellowBoxState.plainHits++; if(yellowBoxState.plainHits>=2){ yellowBoxState.mode='robot'; yellowBoxState.robotHits=0; yellowBoxState.plainHits=0; } }
+          else{ yellowBoxState.robotHits++; if(yellowBoxState.robotHits>=3){ yellowBoxState.mode='plain'; yellowBoxState.plainHits=0; yellowBoxState.robotHits=0; } }
+        }
+        if(g.c===C.blue){
+          if(blueBoxState.mode==='plain'){ blueBoxState.plainHits++; if(blueBoxState.plainHits>=2){ blueBoxState.mode='bear'; blueBoxState.bearHits=0; blueBoxState.plainHits=0; } }
+          else{ blueBoxState.bearHits++; if(blueBoxState.bearHits>=3){ blueBoxState.mode='plain'; blueBoxState.plainHits=0; blueBoxState.bearHits=0; } }
+        }
+        if(g.c===C.red){
+          if(redBoxState.mode==='plain'){ redBoxState.plainHits++; if(redBoxState.plainHits>=2){ redBoxState.mode='cake'; redBoxState.cakeHits=0; redBoxState.plainHits=0; } }
+          else{ redBoxState.cakeHits++; if(redBoxState.cakeHits>=3){ redBoxState.mode='plain'; redBoxState.plainHits=0; redBoxState.cakeHits=0; } }
+        }
+
+        setTimeout(function(){ g.hb=false; },1000);
+      }else g.p*=.9;
+    });
+  }
+
+  // Santa (충돌→비디오 토글)
+  (function(){
+    const s=santa, sx=s.x, sy=s.y, sw=s.w, sh=s.h;
+    const nx=clamp(ball.x,sx-sw/2,sx+sw/2), ny=clamp(ball.y,sy-sh/2,sy+sh/2);
+    const dx=ball.x-nx, dy=ball.y-ny;
+
+    if(!inEscape() && !holdAtTop && dx*dx+dy*dy<(BALL_R+6)*(BALL_R+6)){
+      s.p=1; score+=900; ping(s.n,.2); burstHit(nx,ny,22,260);
+      ball.vx*=.98; ball.vy*=.98;
+      if(!s.playing){ s.wantPlay=true; santaPlay(); }
+      else{ santaPause(); }
+    }
+    s.rot = 0; s.rv = 0; s.p*=.92;
+  })();
+
+  // Rudolph (충돌→비디오 토글)
+  (function(){
+    if(inEscape() || holdAtTop) return;
+    const r=rudolph;
+    const drawW = (santa.imgW||santa.w), drawH=(santa.imgH||santa.h);
+    const cx=r.x, cy=r.y;
+
+    const w=drawW, h=drawH;
+    const tw=w/3, bw=w;
+    const TL={x:cx-tw/2,y:cy-h/2}, TR={x:cx+tw/2,y:cy-h/2}, BR={x:cx+bw/2,y:cy+h/2}, BL={x:cx-bw/2,y:cy+h/2};
+    let hit=false; [[TR,BR],[BR,BL],[BL,TL]].forEach(function(e){ if(hitSeg(e[0].x,e[0].y,e[1].x,e[1].y,12)) hit=true; });
+
+    if(hit){
+      r.p=1; score+=900; ping(r.n,.2); burstHit(ball.x,ball.y,22,260);
+      ball.vx*=.98; ball.vy*=.98;
+      if(!r.playing){ r.wantPlay=true; rudolphPlay(); }
+      else{ rudolphPause(); }
+    }
+    r.rot=0; r.rv=0; r.p*=.92;
+  })();
+
+  // Snowman (충돌→얼음 효과/흔들림)
+  (function(){
+    if(inEscape() || holdAtTop) return;
+
+    const hit = Math.hypot(ball.x-snow.x, ball.y-snow.y) < BALL_R+snow.body
+      || Math.hypot(ball.x-snow.x, ball.y-(snow.y-36)) < BALL_R+snow.head;
+
+    if(hit){
+      snow.p=1; score+=650; ping(snow.n,.18); burstHit(ball.x,ball.y,20,230);
+      const dir = (ball.x < snow.x ? -1 : 1);
+      snow.rv += (0.9 + snow.spin * 2.2) * dir;
+
+      // 바깥쪽으로 밀어내기
+      const dx = ball.x - snow.x;
+      const dy = ball.y - snow.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      const nx = dx / dist;
+      const ny = dy / dist;
+      const OUT_IMPULSE = 18;
+      ball.vx += nx * OUT_IMPULSE;
+      ball.vy += ny * OUT_IMPULSE * 0.4;
+      ball.x += nx * 2;
+      ball.y += ny * 2;
+
+      iceUntil = nowSec() + ICE_DUR;
+      for(let i=0;i<60;i++) spawnFlake(ball.x,ball.y,220,1.4);
+    }
+
+    const K = 8.0, Cc = 3.6;
+    snow.rv += (-K * snow.rot - Cc * snow.rv) * dt;
+    snow.rot += snow.rv * dt;
+
+    const motion = Math.abs(snow.rv) + Math.abs(snow.rot)*0.6;
+    if(motion > 0.015){
+      const emitR = Math.max(snow.body, snow.head) + 16;
+      const spray = 10;
+      for(let i=0;i<spray;i++){
+        const a = rnd(0,Math.PI*2);
+        spawnFlake(snow.x, snow.y, 160, 1.0, { dirAng:a, startR:emitR, driftAcc:260 });
+      }
+    }
+
+    if(Math.abs(snow.rv) < 0.0008 && Math.abs(snow.rot) < 0.006){
+      snow.rv = 0; snow.rot = 0;
+    }
+
+    snow.p*=.92;
+  })();
+
+  // Rollovers
+  roll.forEach(function(r){
+    if(inEscape() || holdAtTop) return;
+    const dx=ball.x-r.x, dy=ball.y-r.y;
+    if(!r.h && dx*dx+dy*dy<(BALL_R+14)*(BALL_R+14)){
+      r.h=true; score+=700; ping(r.n,.18); burstHit(r.x,r.y,18,200);
+      setTimeout(function(){ r.h=false; },1500);
+    }
+  });
+
+  // Stuck detect
+  if(!holdAtTop){
+    const d=Math.hypot(ball.x-stuckOrigin.x, ball.y-stuckOrigin.y);
+    if(d>STUCK_RADIUS){ stuckReset(false); }
+    else if((nowSec()-stuckStartT)>=STUCK_TIME && !inEscape()){ startEscape(); }
+  }
+
+  // Trail
+  if(!holdAtTop) addTrail(dt);
+
+  // Draw
+  draw(dt);
+  requestAnimationFrame(tick);
+}
+
+/* ================ Trail ================ */
+function addTrail(dt){
+  const ang=Math.atan2(ball.vy,ball.vx);
+  trail.push({x:ball.x,y:ball.y,alpha:Math.min(0.36,TRAIL_ALPHA_MAX),sz:ball.r*1.2,ang});
+  if(trail.length>TRAIL_CAP) trail.shift();
+  const fade=inEscape()?TRAIL_FADE_ESCAPE:TRAIL_BASE_FADE;
+  for(let i=0;i<trail.length;i++){
+    const t=trail[i];
+    t.alpha=Math.max(0,Math.min(TRAIL_ALPHA_MAX,t.alpha - fade*dt));
+    t.sz*= (1 - 0.55*dt);
+  }
+  if(!inEscape() && ballAlpha<BALL_ALPHA_MAX) {
+    ballAlpha=Math.min(BALL_ALPHA_MAX, ballAlpha + 1.4*dt);
+  }
+}
+
+/* ================ Draw ================ */
+function draw(dt){
+  // Background video
+  if(vidReady){
+    const iw = BG_VID.videoWidth || 0, ih = BG_VID.videoHeight || 0;
+    if(iw && ih){
+      const scale = Math.max(W/iw, H/ih);
+      const nw = Math.max(1, Math.round(iw*scale));
+      const nh = Math.max(1, Math.round(ih*scale));
+      const ox = (W - nw)/2;
+      const oy = (H - nh)/2;
+      try { ctx.drawImage(BG_VID, ox, oy, nw, nh); }
+      catch(e){ ctx.fillStyle=SK.bg||C.base; ctx.fillRect(0,0,W,H); }
+    }else{
+      ctx.fillStyle=SK.bg||C.base; ctx.fillRect(0,0,W,H);
+    }
+  }else{
+    ctx.fillStyle=SK.bg||C.base; ctx.fillRect(0,0,W,H);
+  }
+  // 어둡게 오버레이
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  ctx.fillRect(0,0,W,H);
+
+  // Snow particle layer
+  ctx.save(); ctx.globalAlpha=(SK.snowAlpha!=null?SK.snowAlpha:0.28); ctx.fillStyle="#dbeafe";
+  for(let i=0;i<snowflakes.length;i++){
+    const s=snowflakes[i];
+    s.y+=s.v*dt*8; if(s.y>H) s.y-=H;
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+
+  // Bumpers
+  for(let i=0;i<bumpers.length;i++){
+    const b=bumpers[i];
+    ctx.save(); ctx.globalAlpha=.8+.2*b.k; ctx.fillStyle=b.c; circ(b.x,b.y,b.r);
+    ctx.fillStyle="#e6f5ff"; rectC(b.x,b.y-b.r-8,12,10,3); ctx.restore();
+  }
+
+  // Gifts
+  for(let i=0;i<gifts.length;i++){
+    const g=gifts[i];
+    ctx.save();
+    ctx.globalAlpha=.95+.05*g.p;
+    const s=(g.s||1);
+    const gw=g.w*s, gh=g.h*s;
+    function drawBox(img){
+      const iw=img && (img.naturalWidth||img.width||0);
+      const ih=img && (img.naturalHeight||img.height||0);
+      if(iw&&ih){
+        const scale=Math.min(gw/iw, gh/ih);
+        const dw=Math.max(1,iw*scale), dh=Math.max(1,ih*scale);
+        safeDrawImage(img, g.x-dw/2, g.y-dh/2, dw, dh);
+      }else{
+        ctx.fillStyle="#ffffff22"; rectC(g.x,g.y,gw,gh,6);
+      }
+    }
+    if(g.c===C.blue && (bluePlainReady||blueBearReady)){
+      drawBox((blueBoxState.mode==='bear'&&blueBearReady)?IMGS.blueBear:IMGS.bluePlain);
+    }else if(g.c===C.gold && (yellowPlainReady||yellowRobotReady)){
+      drawBox((yellowBoxState.mode==='robot'&&yellowRobotReady)?IMGS.yellowRobot:IMGS.yellow);
+    }else if(g.c===C.red && (redPlainReady||redCakeReady)){
+      drawBox((redBoxState.mode==='cake'&&redCakeReady)?IMGS.redCake:IMGS.red);
+    }else{
+      ctx.fillStyle="#ffffff22"; rectC(g.x,g.y,gw,gh,6);
+    }
+    ctx.restore();
+  }
+
+  // Garland
+  garland();
+
+  // Characters
+  drawSantaVideo();
+  drawRudolphVideo();
+  drawSnowman();
+
+  // Rollovers (★ 여기서 star() 사용)
+  for(let i=0;i<roll.length;i++){
+    const r=roll[i]; ctx.save(); ctx.fillStyle=C.gold; ctx.globalAlpha=r.h?1:.75; star(r.x,r.y,5,14,6); ctx.restore();
+  }
+
+  // Trail quads
+  for(let i=0;i<trail.length;i++){
+    const t=trail[i]; if(t.alpha<=0) continue;
+    ctx.save();
+    ctx.globalAlpha=Math.min(t.alpha,TRAIL_ALPHA_MAX);
+    const len=Math.max(12,t.sz*2.0), w=Math.max(2,t.sz*0.7);
+    ctx.translate(t.x,t.y); ctx.rotate(t.ang);
+    const gg=ctx.createLinearGradient(0,0,-len,0);
+    gg.addColorStop(0,"rgba(255,255,255,0.38)");
+    gg.addColorStop(1,"rgba(255,215,102,0.00)");
+    ctx.fillStyle=gg;
+    ctx.beginPath();
+    ctx.moveTo(0,0);
+    ctx.quadraticCurveTo(-len*0.5, w, -len, 0);
+    ctx.quadraticCurveTo(-len*0.5,-w, 0, 0);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  // Flippers
+  flipper(flipL); flipper(flipR);
+
+  // Ball
+  if(holdAtTop){
+    drawIdleStar(ball.x,ball.y,ball.r);
+  }else{
+    drawShootingStar(ball.x,ball.y,ball.r,ball.vx,ball.vy,Math.min(ballAlpha,0.40));
+    if(inIce()) drawIceShards(ball.x,ball.y);
+  }
+
+  // Sparks & flakes
+  for(let i=sparks.length-1;i>=0;i--){
+    const p=sparks[i]; p.age+=dt; const k=1-(p.age/p.life);
+    if(k<=0){ sparks.splice(i,1); continue; }
+    if(p.ax||p.ay){ p.vx += (p.ax||0)*dt; p.vy += (p.ay||0)*dt; }
+    p.x+=p.vx*dt; p.y+=p.vy*dt; p.rot=(p.rot||0)+(p.rv||0)*dt;
+
+    if(p.shape==="star"){
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot); ctx.globalAlpha=Math.max(0,k);
+      ctx.fillStyle=p.c||"#FFD766"; drawTinyStar(0,0,p.size||3); ctx.restore();
+    }else if(p.shape==="flake"){
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(p.rot); ctx.globalAlpha=Math.max(0,k*0.9);
+      ctx.strokeStyle="rgba(255,255,255,0.9)"; ctx.lineWidth=1; const r=p.size||2.5;
+      line(-r,0,r,0); line(0,-r,0,r); ctx.rotate(Math.PI/6); line(-r*0.8,0,r*0.8,0); ctx.restore();
+    }else{
+      ctx.save(); ctx.globalAlpha=Math.max(0,k); glow(p.x,p.y, p.size*2+(1-k)*18, p.c||"#FFD766"); ctx.restore();
+    }
+  }
+
+  // HUD
+  ctx.fillStyle="#eaf4ff"; ctx.font=SK.scoreFont || "bold 36px Verdana,Arial"; ctx.fillText("SCORE "+score, 24, 48);
+  ctx.font=SK.helpFont || "14px ui-monospace,Menlo,Consolas";
+  ctx.fillText("Space=발사  ←/→=플리퍼  R=리셋  T=데모  0=모음  1=리빙룸  2=마을  3=우드", 24, 74);
+}
+
+/* ================ Garland & Helpers ================ */
+function garland(){
+  const y=240;
+  const startX=0, endX=W;
+
+  ctx.strokeStyle="rgba(255,255,255,.35)"; ctx.lineWidth=3;
+  ctx.beginPath();
+  ctx.moveTo(startX, y-18);
+  ctx.quadraticCurveTo(W/2, y+40, endX, y-18);
+  ctx.stroke();
+
+  const n=21, pal=SK.bulbPalette||LIGHTS, hz=SK.bulbHz||1.0, tNow=nowSec();
+  for(let i=0;i<n;i++){
+    const t=i/(n-1);
+    const px=startX + (endX-startX)*t;
+    const sag = 30 * Math.sin(Math.PI*t);
+    const bulbY = (y-18) + sag;
+    const w=22,h=26;
+    const col=pal[i%pal.length];
+    ctx.fillStyle=col;
+    ctx.beginPath();
+    ctx.moveTo(px-w/2,bulbY);
+    ctx.lineTo(px+w/2,bulbY);
+    ctx.lineTo(px,bulbY+h);
+    ctx.closePath();
+    ctx.fill();
+
+    const pulse=0.6+0.4*Math.sin(tNow*(hz*2*Math.PI)+i);
+    glow(px,bulbY+h*0.6,18+4*pulse,col);
+  }
+
+  ctx.fillStyle=C.gold;
+  ctx.font="bold 64px Georgia,serif";
+  ctx.textAlign="center";
+  ctx.fillText("Merry Christmas", W/2, y+70);
+  ctx.textAlign="start";
+}
+function line(x1,y1,x2,y2){ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();}
+function circ(x,y,r){ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();}
+function rectC(cx,cy,w,h,r){const x=cx-w/2,y=cy-h/2; if(!r){ctx.fillRect(x,y,w,h);return;}
+  ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.fill();}
+function star(cx,cy,n,or,ir){ // ★ 누락됐던 함수 복구
+  let rot=Math.PI/2*3,x=cx,y=cy; ctx.beginPath();ctx.moveTo(cx,cy-or);
+  for(let i=0;i<n;i++){x=cx+Math.cos(rot)*or; y=cy+Math.sin(rot)*or; ctx.lineTo(x,y); rot+=Math.PI/n;
+  x=cx+Math.cos(rot)*ir; y=cy+Math.sin(rot)*ir; ctx.lineTo(x,y); rot+=Math.PI/n;} ctx.closePath(); ctx.fill();
+}
+function glow(x,y,r,col){const g=ctx.createRadialGradient(x,y,0,x,y,r); g.addColorStop(0,col); g.addColorStop(1,"rgba(255,255,255,0)");
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();}
+
+/* Santa 비디오 */
+function drawSantaVideo(){
+  const s=santa, w=s.imgW||s.w, h=s.imgH||s.h;
+  ctx.save();
+  ctx.translate(s.x, s.y);
+  if(s.videoReady && SANTA_VID.videoWidth && SANTA_VID.videoHeight){
+    const prevOp = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = 'screen';
+    try{ ctx.drawImage(SANTA_VID, -w/2, -h/2, w, h); }
+    catch(e){ ctx.globalCompositeOperation = prevOp; ctx.fillStyle="#d9d9d9"; rectC(0,0,80,100,12); ctx.restore(); return; }
+    ctx.globalCompositeOperation = prevOp;
+  }else{
+    if(s.imgReady){ safeDrawImage(IMGS.santa, -w/2, -h/2, w, h); }
+    else{ ctx.fillStyle="#d9d9d9"; rectC(0,0,80,100,12); }
+  }
+  ctx.restore();
+}
+
+/* Rudolph 비디오 */
+function drawRudolphVideo(){
+  const r=rudolph;
+  const w=(santa.imgW||santa.w), h=(santa.imgH||santa.h);
+  ctx.save();
+  ctx.translate(r.x, r.y);
+  if(r.videoReady && RUDOLPH_VID.videoWidth && RUDOLPH_VID.videoHeight){
+    const prevOp = ctx.globalCompositeOperation;
+    ctx.globalCompositeOperation = 'screen';
+    try{ ctx.drawImage(RUDOLPH_VID, -w/2, -h/2, w, h); }
+    catch(e){
+      ctx.globalCompositeOperation = prevOp;
+      ctx.fillStyle="#c68642"; rectC(0,0,w,h,12); ctx.restore(); return;
+    }
+    ctx.globalCompositeOperation = prevOp;
+  }else{
+    if(r.imgReady){ safeDrawImage(IMGS.rudolph, -w/2, -h/2, w, h); }
+    else{
+      const tw=w/3, bw=w;
+      ctx.fillStyle="#c68642"; ctx.beginPath();
+      ctx.moveTo(-tw/2,-h/2); ctx.lineTo(tw/2,-h/2); ctx.lineTo(bw/2,h/2); ctx.lineTo(-bw/2,h/2); ctx.closePath(); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+function drawSnowman(){
+  const s=snow;
+  ctx.save(); ctx.translate(s.x,s.y); ctx.rotate(s.rot);
+  if(s.imgReady){
+    safeDrawImage(IMGS.snowman, -s.imgW/2, -s.imgH/2, s.imgW, s.imgH);
+  }else{
+    ctx.globalAlpha=.95; ctx.fillStyle=C.white; circ(0,0,s.body); circ(0,-36,s.head);
+    ctx.fillStyle=C.dark;  circ(-6,-40,3); circ(6,-40,3);
+    ctx.fillStyle="#ffa94d"; ctx.beginPath(); ctx.moveTo(2,-36); ctx.lineTo(24,-32); ctx.lineTo(2,-34); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle="#8b5a2b"; ctx.lineWidth=3; line(-20,-20,-38,-28); line(20,-20,38,-28);
+  }
+  ctx.restore();
+}
+function flipper(f){
+  ctx.save(); ctx.translate(f.cx,f.cy); ctx.rotate(f.angle);
+  const w=f.w,h=f.h,r=10,x=-w/2,y=-h/2;
+  ctx.beginPath();ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);ctx.lineTo(x+r,y+h);
+  ctx.quadraticCurveTo(x,y+h,x,y+h-r);ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.closePath();
+  ctx.save(); ctx.clip(); ctx.rotate(-Math.PI/4); const pitch=18;
+  for(let i=-w*3;i<w*3;i+=pitch){
+    ctx.fillStyle=C.red;   ctx.fillRect(i,-h*8,pitch/3+1,h*16);
+    ctx.fillStyle=C.green; ctx.fillRect(i+pitch/3,-h*8,pitch/3+1,h*16);
+    ctx.fillStyle=C.white; ctx.fillRect(i+2*pitch/3,-h*8,pitch/3+1,h*16);
+  }
+  ctx.restore(); ctx.restore();
+}
+
+/* 별 핀볼 얼음 조각 */
+function drawIceShards(x,y){
+  const t = nowSec();
+  const left = Math.max(0, iceUntil - t);
+  const k = Math.min(1, left / ICE_DUR);
+  const count = 8;
+  for(let i=0;i<count;i++){
+    const ang = (i/count)*Math.PI*2 + t*0.8;
+    const r = 22 + 10*k + (i%2?6:0);
+    const x1 = x + Math.cos(ang)*r;
+    const y1 = y + Math.sin(ang)*r;
+    const x2 = x + Math.cos(ang+0.18)*(r+10+8*k);
+    const y2 = y + Math.sin(ang+0.18)*(r+10+8*k);
+    const x3 = x + Math.cos(ang-0.18)*(r+10+8*k);
+    const y3 = y + Math.sin(ang-0.18)*(r+10+8*k);
+    ctx.save();
+    ctx.globalAlpha = 0.25 + 0.25*k;
+    ctx.fillStyle = "rgba(102,208,255,0.65)";
+    ctx.beginPath();
+    ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.lineTo(x3,y3); ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+/* 상단 대기용 별 */
+function drawIdleStar(x,y,r){
+  const pts=starPath(0,0,5,r*1.58,r*0.72,0);
+  ctx.save(); ctx.translate(x,y);
+  ctx.fillStyle="#FFD800"; ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]);
+  ctx.closePath(); ctx.fill();
+  ctx.lineWidth=1.5; ctx.strokeStyle="#D9A600"; ctx.stroke();
+  const t=nowSec();
+  const pulse=0.55+0.45*Math.sin(t*4.2);
+  glow(0,0,r*(3.0+pulse*1.8),"rgba(255,230,140,0.40)");
+  glow(0,0,r*(1.9+pulse*0.9),"rgba(255,255,255,0.30)");
+  ctx.restore();
+}
+function drawTinyStar(cx,cy,r){
+  ctx.beginPath(); let rot=-Math.PI/2, step=Math.PI/5;
+  ctx.moveTo(cx+Math.cos(rot)*r, cy+Math.sin(rot)*r);
+  for(let i=0;i<10;i++){
+    const rad=(i%2===0)?r:r*0.45;
+    ctx.lineTo(cx+Math.cos(rot)*rad, cy+Math.sin(rot)*rad); rot+=step;
+  }
+  ctx.closePath(); ctx.fill();
+}
+function starPath(cx,cy,spikes,outerR,innerR,rot){
+  const pts=[]; let angle=Math.PI/2*3+rot; const step=Math.PI/spikes;
+  for(let i=0;i<spikes;i++){
+    pts.push([cx+Math.cos(angle)*outerR, cy+Math.sin(angle)*outerR]); angle+=step;
+    pts.push([cx+Math.cos(angle)*innerR, cy+Math.sin(angle)*innerR]); angle+=step;
+  }
+  return pts;
+}
+function drawShootingStar(x,y,r,vx,vy,alpha){
+  const ang=Math.atan2(vy,vx), speed=Math.hypot(vx,vy);
+  const tailLen=Math.min(180, 40 + speed*4);
+  const tx=x-Math.cos(ang)*tailLen, ty=y-Math.sin(ang)*tailLen;
+  const g=ctx.createLinearGradient(x,y,tx,ty);
+  g.addColorStop(0,"rgba(255,255,255,0.35)");
+  g.addColorStop(0.3,"rgba(255,215,102,0.22)");
+  g.addColorStop(1,"rgba(255,215,102,0.00)");
+  ctx.save();
+  ctx.globalAlpha=Math.min(alpha,0.40);
+  ctx.fillStyle=g;
+  ctx.beginPath();
+  const spread=Math.max(10,r*1.2), nx=Math.cos(ang+Math.PI/2)*spread, ny=Math.sin(ang+Math.PI/2)*spread;
+  ctx.moveTo(x,y);
+  ctx.lineTo(tx+nx*0.6,ty+ny*0.6);
+  ctx.lineTo(tx-nx*0.6,ty-ny*0.6);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+
+  const BODY_SCALE=1.5, outer=r*1.05*BODY_SCALE, inner=r*0.48*BODY_SCALE;
+  const pts=starPath(0,0,5,outer,inner,-ang);
+  ctx.save(); ctx.translate(x,y);
+  ctx.globalAlpha=1.0; ctx.fillStyle="#FFD800";
+  ctx.beginPath(); ctx.moveTo(pts[0][0],pts[0][1]); for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i][0],pts[i][1]); ctx.closePath(); ctx.fill();
+  ctx.lineWidth=1.5; ctx.strokeStyle="#D9A600"; ctx.stroke();
+  glow(0,0,outer*2.0,"rgba(255,230,140,0.35)");
+  ctx.restore();
+}
+
+/* Intro hint & 시작 상태 */
+try{
+  ctx.fillStyle="#eaf4ff"; ctx.font="bold 20px Verdana,Arial";
+  ctx.fillText("로드 완료: Space 발사, ←/→ 플리퍼, T 데모, R 상단대기, 0/1/2/3 스킨 변경", 42, 80);
+}catch(e){}
+setSkin('village');
+reset();
+
+})();
+</script>
+</body>
+</html>
