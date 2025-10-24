@@ -3,11 +3,13 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no" />
-<title>Christmas Pinball – Snowman Flakes & Ice (PC+Mobile)</title>
+<title>Christmas Pinball – Snowman Flakes & Ice (PC+Mobile Fixed)</title>
 <style>
   html,body{margin:0;height:100%;background:#0b1120;overflow:hidden}
   #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
   canvas{background:#0b1120;display:block;max-width:100vw;max-height:100vh;touch-action:none}
+  /* 오버레이가 터치를 먹지 않도록 처리 */
+  .hud,.topright,.errbadge{pointer-events:none}
   .hud{position:fixed;left:12px;bottom:12px;color:#d8f0ff;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;
        background:rgba(255,255,255,.06);border:0;padding:8px 10px;border-radius:8px}
   .topright{position:fixed;right:12px;top:12px;color:#e6f5ff;font:12px ui-monospace,Menlo,Consolas,monospace;
@@ -264,7 +266,9 @@ addEventListener('keyup',e=>keys.delete(e.code));
 
 /* ================ 모바일/포인터 입력 ================ */
 // 좌/우 플리퍼 "영역" 정의 (근처 누르고 있는 동안만 동작)
-const FL_AREA_W = FL_W*0.75, FL_AREA_H = 280; // 넉넉한 터치박스
+// — 넉넉한 터치 박스로 확대
+const FL_AREA_W = FL_W * 1.0;   // 0.75 → 1.0 (폭 넓힘)
+const FL_AREA_H = 360;          // 280 → 360 (높이 넓힘)
 const flAreaL = { cx: flLx, cy: flY, w: FL_AREA_W, h: FL_AREA_H };
 const flAreaR = { cx: flRx, cy: flY, w: FL_AREA_W, h: FL_AREA_H };
 function inRect(x,y,rc){ return Math.abs(x-rc.cx) <= rc.w/2 && Math.abs(y-rc.cy) <= rc.h/2; }
@@ -285,15 +289,21 @@ function updateFlipperTouches(){
   // 현재 activePointers에서 side별 존재 확인
   touchL = false; touchR = false;
   for(const p of activePointers.values()){ if(p.side==='L') touchL=true; if(p.side==='R') touchR=true; }
-  // 데모 길게누름 판정
+  // 데모 길게누름 판정 (좌우를 모두 1초 이상 유지)
   const both = touchL && touchR;
-  if(both){ if(demoArmT==null){ demoArmT = performance.now(); demoLatched=false; } else { const held = (performance.now()-demoArmT)/1000; if(held>=1.0 && !demoLatched){ demo = !demo; demoLatched = true; ping(92,0.18,1.0); } } }
+  if(both){ if(demoArmT==null){ demoArmT = performance.now(); demoLatched=false; }
+    else { const held = (performance.now()-demoArmT)/1000; if(held>=1.0 && !demoLatched){ demo = !demo; demoLatched = true; ping(92,0.18,1.0); } } }
   else { demoArmT = null; demoLatched=false; }
 }
 
 canvas.addEventListener('pointerdown', (e)=>{
+  // 포인터 캡처로 멀티터치 안정화
+  canvas.setPointerCapture?.(e.pointerId);
   const {x,y} = viewToCanvas(e.clientX, e.clientY);
-  const side = inRect(x,y,flAreaL) ? 'L' : (inRect(x,y,flAreaR) ? 'R' : null);
+  // pointerdown 시점의 side를 "고정" (롱프레스 중 흔들리지 않도록)
+  let side = null;
+  if(inRect(x,y,flAreaL)) side = 'L';
+  else if(inRect(x,y,flAreaR)) side = 'R';
   activePointers.set(e.pointerId, {x,y, side, downT: performance.now(), moved:false, startX:x, startY:y});
   if(side==='L' || side==='R') updateFlipperTouches();
 });
@@ -302,9 +312,9 @@ canvas.addEventListener('pointermove', (e)=>{
   const p = activePointers.get(e.pointerId); if(!p) return;
   const {x,y} = viewToCanvas(e.clientX, e.clientY); p.x=x; p.y=y;
   if(!p.moved && Math.hypot(x-p.startX, y-p.startY) > 12) p.moved = true;
-  // 영역 이동 시 side 갱신
-  const newSide = inRect(x,y,flAreaL) ? 'L' : (inRect(x,y,flAreaR) ? 'R' : null);
-  if(newSide !== p.side){ p.side = newSide; updateFlipperTouches(); }
+  // side는 pointerdown 기준으로 고정. 단, 처음에 null이었고 플리퍼 영역에 들어오면 1회만 설정.
+  if(p.side==null){ if(inRect(x,y,flAreaL)) { p.side='L'; updateFlipperTouches(); }
+                    else if(inRect(x,y,flAreaR)) { p.side='R'; updateFlipperTouches(); } }
 });
 
 function handleTapOrReleaseActions(p){
@@ -319,7 +329,6 @@ function handleTapOrReleaseActions(p){
   const sr = scoreHitRect; if(p.x>=sr.x && p.x<=sr.x+sr.w() && p.y>=sr.y && p.y<=sr.y+sr.h){ reset(); return; }
 
   // 3) (빈 공간 탭) → 스킨 순환
-  // 플리퍼 영역이 아니고, 캐릭/오브젝트 탭도 아닌 경우로 가볍게 처리
   if(!(inRect(p.x,p.y,flAreaL)||inRect(p.x,p.y,flAreaR))){ cycleSkin(); return; }
 }
 
@@ -328,8 +337,6 @@ function endPointer(id){
 
 canvas.addEventListener('pointerup',   (e)=> endPointer(e.pointerId));
 canvas.addEventListener('pointercancel',(e)=> endPointer(e.pointerId));
-
-// 메인 루프에서 touchL/touchR이 플리퍼를 누르는 것으로 반영됨
 
 /* ================ Helpers ================ */
 function speed(){return Math.hypot(ball.vx,ball.vy);} 
@@ -393,7 +400,7 @@ function tick(ts){ const dt=Math.min(.033,(ts-last)/1000); last=ts;
 
 /* ================ Trail ================ */
 const trail=[];
-function addTrail(dt){ const ang=Math.atan2(ball.vy,ball.vx); trail.push({x:ball.x,y:ball.y,alpha:Math.min(0.36,TRAIL_ALPHA_MAX),sz:ball.r*1.2,ang}); if(trail.length>TRAIL_CAP) trail.shift(); const fade=inEscape()?TRAIL_FADE_ESCAPE:TRAIL_BASE_FADE; for(let i=0;i<trail.length;i++){ const t=trail[i]; t.alpha=Math.max(0,Math.min(TRAIL_ALPHA_MAX,t.alpha - fade*dt)); t.sz*= (1 - 0.55*dt); } if(!inEscape() && ballAlpha<BALL_ALPHA_MAX) { ballAlpha=Math.min(BALL_ALPHA_MAX, ballAlpha - 0 + 1.4*dt); } }
+function addTrail(dt){ const ang=Math.atan2(ball.vy,ball.vx); trail.push({x:ball.x,y:ball.y,alpha:Math.min(0.36,TRAIL_ALPHA_MAX),sz:ball.r*1.2,ang}); if(trail.length>TRAIL_CAP) trail.shift(); const fade=inEscape()?TRAIL_FADE_ESCAPE:TRAIL_BASE_FADE; for(let i=0;i<trail.length;i++){ const t=trail[i]; t.alpha=Math.max(0,Math.min(TRAIL_ALPHA_MAX,t.alpha - fade*dt)); t.sz*= (1 - 0.55*dt); } if(!inEscape() && ballAlpha<BALL_ALPHA_MAX) { ballAlpha=Math.min(BALL_ALPHA_MAX, ballAlpha + 1.4*dt); } }
 
 /* ================ Draw ================ */
 function draw(dt){
