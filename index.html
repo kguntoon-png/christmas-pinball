@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no" />
-<title>Christmas Pinball – Snowman Flakes & Ice (PC+Mobile Fixed, 점수 팝업 포함)</title>
+<title>Christmas Pinball – Snowman Flakes & Ice (PC+Mobile, 점수 팝업 가시성 강화)</title>
 <style>
   html,body{margin:0;height:100%;background:#0b1120;overflow:hidden}
   #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
@@ -48,7 +48,24 @@ window.addEventListener('unhandledrejection', e => { showErr("Promise Rejection:
 const W=900,H=1600;
 const canvas=document.getElementById('game');
 const ctx=canvas.getContext('2d');
-function fit(){const s=Math.min(innerWidth/W,innerHeight/H);canvas.style.width=W*s+'px';canvas.style.height=H*s+'px';}
+
+/* 화면 축소 비율을 기반으로 모바일 점수 팝업 크기 자동 조정 */
+let fitScale = 1;           // CSS 스케일
+let devicePopScale = 1;     // 점수 팝업 전용 스케일(작은 화면일수록 크게)
+function computePopScale(s){
+  // s는 캔버스가 화면에 맞추기 위해 적용된 CSS 스케일(작을수록 화면이 작음)
+  // 임계값 기반으로 증가: s<0.7 → 2.0배, s<0.9 → 1.5배, 그 외 1.0배
+  if(s < 0.7) return 2.0;
+  if(s < 0.9) return 1.5;
+  return 1.0;
+}
+function fit(){
+  const s=Math.min(innerWidth/W,innerHeight/H);
+  fitScale = s;
+  devicePopScale = computePopScale(s);
+  canvas.style.width=W*s+'px';
+  canvas.style.height=H*s+'px';
+}
 addEventListener('resize',fit); fit();
 
 /* ================ Palette ================ */
@@ -343,11 +360,12 @@ function startEscape(){ ballAlpha=0.5; let vx=ball.vx, vy=ball.vy, s=Math.hypot(
 /* ================ ★ 점수 팝업(Score Pop) ================ */
 const pops=[]; const MAX_POPS=24;
 function addPop(x,y,pts,color="#FFD766"){
-  const jitter = 4;
+  const jitter = 4*devicePopScale;
   pops.push({
     x:x + rnd(-jitter,jitter),
     y:y + rnd(-jitter,jitter),
     vy:-22, scale:1, age:0, life:0.9,
+    baseScale: devicePopScale,        // 화면 크기별 기본 스케일 저장
     text:`+${pts}`, color
   });
   if(pops.length>MAX_POPS) pops.shift();
@@ -382,24 +400,24 @@ function tick(ts){ const dt=Math.min(.033,(ts-last)/1000); last=ts;
   flipR.angle += ((useR?flipR.up:flipR.rest)-flipR.angle)*0.4;
   function flipperHitSafe(f,active){ if(inEscape() || holdAtTop) return; const c=Math.cos(f.angle), s=Math.sin(f.angle); const dx=ball.x-f.cx, dy=ball.y-f.cy; const lx=c*dx + s*dy, ly=-s*dx + c*dy; const hw=f.w/2, hh=f.h/2; if(lx>-hw-ball.r && lx<hw+ball.r && ly>-hh-ball.r && ly<hh+ball.r){ const px=clamp(lx,-hw,hw), py=clamp(ly,-hh,hh); let nx=lx-px, ny=ly-py, d=Math.hypot(nx,ny); if(d===0){nx=0;ny=(ly>0?1:-1);d=1}else{nx/=d;ny/=d} const gvx=c*ball.vx - s*ball.vy, gvy=s*ball.vx + c*ball.vy; const ref=reflect(gvx,gvy,nx,ny,0.9); const impBase = active ? 36 : 6; const iceBoost = inIce() ? 2.0 : 1.0; const imp = impBase * iceBoost; const nvx = ref[0] + nx*imp, nvy = ref[1] + ny*imp; ball.vx = c*nvx - s*nvy; ball.vy = s*nvx + c*nvy; const wx=(c*px - s*py)+f.cx, wy=(s*px + c*py)+f.cy; const nxw=c*nx - s*ny, nyw=s*nx + c*ny; ball.x=wx+nxw*(ball.r+1); ball.y=wy+nyw*(ball.r+1); ping(active?96:86,.16,active?1:0.8); burstHit(ball.x,ball.y,18,240); } }
   flipperHitSafe(flipL,useL); flipperHitSafe(flipR,useR);
-  // Bumpers
-  if(!holdAtTop){ bumpers.forEach(b=>{ if(hitCircle(b.x,b.y,b.r)){ b.k=1; score+=500; addPop(ball.x,ball.y,500,b.c); ping(b.n,.18); burstHit(ball.x,ball.y,18,220); const N = 12, R = b.r + 20, DRIFT = 300, PIECES = 26; for(let j=0;j<N;j++){ const a0 = (j/N)*Math.PI*2; const cx = b.x + Math.cos(a0)*R; const cy = b.y + Math.sin(a0)*R; const ox = cx - b.x, oy = cy - b.y, od = Math.hypot(ox, oy) || 1; const ax = (ox/od) * DRIFT, ay = (oy/od) * DRIFT; for(let i=0;i<PIECES;i++){ const ang = i/PIECES*2*Math.PI + rnd(-0.12, 0.12); const spd = rnd(2.2, 4.2); sparks.push({x:cx,y:cy,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,ax,ay,age:0,life:rnd(0.8,1.3),size:rnd(3.5,6.0),c:b.c,shape:"star",rot:rnd(0,Math.PI*2),rv:rnd(-4,4)}); sparks.push({x:cx,y:cy,vx:Math.cos(ang)*spd*0.6,vy:Math.sin(ang)*spd*0.6,ax,ay,age:0,life:rnd(0.45,0.75),size:rnd(2.5,4.0),c:b.c,shape:"glow"}); } } } b.k*=.9; }); }
-  // Gifts
-  if(!holdAtTop){ gifts.forEach(g=>{ const s=(g.s||1); const gw=g.w*s, gh=g.h*s; const nx=clamp(ball.x,g.x-gw/2,g.x+gw/2), ny=clamp(ball.y,g.y-gh/2,g.y+gh/2); const dx=ball.x-nx, dy=ball.y-ny; if(!g.hb && dx*dx+dy*dy<(BALL_R+6)*(BALL_R+6)){ g.hb=true; g.p=1; score+=800; addPop(g.x, g.y-24, 800, g.c); ping(g.n,.2); ping(g.n+4,.18,.85); burstHit(g.x,g.y,20,230);
+  // Bumpers (+7)
+  if(!holdAtTop){ bumpers.forEach(b=>{ if(hitCircle(b.x,b.y,b.r)){ b.k=1; score+=7; addPop(ball.x,ball.y,7,b.c); ping(b.n,.18); burstHit(ball.x,ball.y,18,220); const N = 12, R = b.r + 20, DRIFT = 300, PIECES = 26; for(let j=0;j<N;j++){ const a0 = (j/N)*Math.PI*2; const cx = b.x + Math.cos(a0)*R; const cy = b.y + Math.sin(a0)*R; const ox = cx - b.x, oy = cy - b.y, od = Math.hypot(ox, oy) || 1; const ax = (ox/od) * DRIFT, ay = (oy/od) * DRIFT; for(let i=0;i<PIECES;i++){ const ang = i/PIECES*2*Math.PI + rnd(-0.12, 0.12); const spd = rnd(2.2, 4.2); sparks.push({x:cx,y:cy,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd,ax,ay,age:0,life:rnd(0.8,1.3),size:rnd(3.5,6.0),c:b.c,shape:"star",rot:rnd(0,Math.PI*2),rv:rnd(-4,4)}); sparks.push({x:cx,y:cy,vx:Math.cos(ang)*spd*0.6,vy:Math.sin(ang)*spd*0.6,ax,ay,age:0,life:rnd(0.45,0.75),size:rnd(2.5,4.0),c:b.c,shape:"glow"}); } } } b.k*=.9; }); }
+  // Gifts (+8)
+  if(!holdAtTop){ gifts.forEach(g=>{ const s=(g.s||1); const gw=g.w*s, gh=g.h*s; const nx=clamp(ball.x,g.x-gw/2,g.x+gw/2), ny=clamp(ball.y,g.y-gh/2,g.y+gh/2); const dx=ball.x-nx, dy=ball.y-ny; if(!g.hb && dx*dx+dy*dy<(BALL_R+6)*(BALL_R+6)){ g.hb=true; g.p=1; score+=8; addPop(g.x, g.y-24, 8, g.c); ping(g.n,.2); ping(g.n+4,.18,.85); burstHit(g.x,g.y,20,230);
       if(g.c===C.gold){ if(yellowBoxState.mode==='plain'){ yellowBoxState.plainHits++; if(yellowBoxState.plainHits>=2){ yellowBoxState.mode='robot'; yellowBoxState.robotHits=0; yellowBoxState.plainHits=0; } } else{ yellowBoxState.robotHits++; if(yellowBoxState.robotHits>=3){ yellowBoxState.mode='plain'; yellowBoxState.plainHits=0; yellowBoxState.robotHits=0; } } }
       if(g.c===C.blue){ if(blueBoxState.mode==='plain'){ blueBoxState.plainHits++; if(blueBoxState.plainHits>=2){ blueBoxState.mode='bear'; blueBoxState.bearHits=0; blueBoxState.plainHits=0; } } else{ blueBoxState.bearHits++; if(blueBoxState.bearHits>=3){ blueBoxState.mode='plain'; blueBoxState.plainHits=0; blueBoxState.bearHits=0; } } }
       if(g.c===C.red){ if(redBoxState.mode==='plain'){ redBoxState.plainHits++; if(redBoxState.plainHits>=2){ redBoxState.mode='cake'; redBoxState.cakeHits=0; redBoxState.plainHits=0; } } else{ redBoxState.cakeHits++; if(redBoxState.cakeHits>=3){ redBoxState.mode='plain'; redBoxState.plainHits=0; redBoxState.cakeHits=0; } } }
       setTimeout(function(){ g.hb=false; },1000);
     }else g.p*=.9; }); }
-  // Santa (충돌→비디오 토글)
-  (function(){ const s=santa, sx=s.x, sy=s.y, sw=s.w, sh=s.h; const nx=clamp(ball.x,sx-sw/2,sx+sw/2), ny=clamp(ball.y,sy-sh/2,sy+sh/2); const dx=ball.x-nx, dy=ball.y-ny; if(!inEscape() && !holdAtTop && dx*dx+dy*dy<(BALL_R+6)*(BALL_R+6)){ s.p=1; score+=900; addPop(nx, ny-18, 900, C.gold); ping(s.n,.2); burstHit(nx,ny,22,260); ball.vx*=.98; ball.vy*=.98; if(!s.playing){ s.wantPlay=true; santaPlay(); } else{ santaPause(); } } s.rot = 0; s.rv = 0; s.p*=.92; })();
-  // Rudolph (충돌→비디오 토글)
-  (function(){ if(inEscape() || holdAtTop) return; const r=rudolph; const drawW = (santa.imgW||santa.w), drawH=(santa.imgH||santa.h); const cx=r.x, cy=r.y; const w=drawW, h=drawH; const tw=w/3, bw=w; const TL={x:cx-tw/2,y:cy-h/2}, TR={x:cx+tw/2,y:cy-h/2}, BR={x:cx+bw/2,y:cy+h/2}, BL={x:cx-bw/2,y:cy+h/2}; let hit=false; [[TR,BR],[BR,BL],[BL,TL]].forEach(function(e){ if(hitSeg(e[0].x,e[0].y,e[1].x,e[1].y,12)) hit=true; }); if(hit){ r.p=1; score+=900; addPop(ball.x, ball.y-18, 900, C.gold); ping(r.n,.2); burstHit(ball.x,ball.y,22,260); ball.vx*=.98; ball.vy*=.98; if(!r.playing){ r.wantPlay=true; rudolphPlay(); } else{ rudolphPause(); } } r.rot=0; r.rv=0; r.p*=.92; })();
-  // Snowman (충돌→얼음 효과)
-  (function(){ if(inEscape() || holdAtTop) return; const hit = Math.hypot(ball.x-snow.x, ball.y-snow.y) < BALL_R+snow.body || Math.hypot(ball.x-snow.x, ball.y-(snow.y-36)) < BALL_R+snow.head; if(hit){ snow.p=1; score+=650; addPop(ball.x, ball.y-16, 650, C.blue); ping(snow.n,.18); burstHit(ball.x,ball.y,20,230); const dir = (ball.x < snow.x ? -1 : 1); snow.rv += (0.9 + snow.spin * 2.2) * dir; const dx = ball.x - snow.x; const dy = ball.y - snow.y; const dist = Math.hypot(dx, dy) || 1; const nx = dx / dist; const ny = dy / dist; const OUT_IMPULSE = 18; ball.vx += nx * OUT_IMPULSE; ball.vy += ny * OUT_IMPULSE * 0.4; ball.x += nx * 2; ball.y += ny * 2; iceUntil = nowSec() + ICE_DUR; for(let i=0;i<60;i++) spawnFlake(ball.x,ball.y,220,1.4); }
+  // Santa (+9, 충돌→비디오 토글)
+  (function(){ const s=santa, sx=s.x, sy=s.y, sw=s.w, sh=s.h; const nx=clamp(ball.x,sx-sw/2,sx+sw/2), ny=clamp(ball.y,sy-sh/2,sy+sh/2); const dx=ball.x-nx, dy=ball.y-ny; if(!inEscape() && !holdAtTop && dx*dx+dy*dy<(BALL_R+6)*(BALL_R+6)){ s.p=1; score+=9; addPop(nx, ny-18, 9, C.gold); ping(s.n,.2); burstHit(nx,ny,22,260); ball.vx*=.98; ball.vy*=.98; if(!s.playing){ s.wantPlay=true; santaPlay(); } else{ santaPause(); } } s.rot = 0; s.rv = 0; s.p*=.92; })();
+  // Rudolph (+9, 충돌→비디오 토글)
+  (function(){ if(inEscape() || holdAtTop) return; const r=rudolph; const drawW = (santa.imgW||santa.w), drawH=(santa.imgH||santa.h); const cx=r.x, cy=r.y; const w=drawW, h=drawH; const tw=w/3, bw=w; const TL={x:cx-tw/2,y:cy-h/2}, TR={x:cx+tw/2,y:cy-h/2}, BR={x:cx+bw/2,y:cy+h/2}, BL={x:cx-bw/2,y:cy+h/2}; let hit=false; [[TR,BR],[BR,BL],[BL,TL]].forEach(function(e){ if(hitSeg(e[0].x,e[0].y,e[1].x,e[1].y,12)) hit=true; }); if(hit){ r.p=1; score+=9; addPop(ball.x, ball.y-18, 9, C.gold); ping(r.n,.2); burstHit(ball.x,ball.y,22,260); ball.vx*=.98; ball.vy*=.98; if(!r.playing){ r.wantPlay=true; rudolphPlay(); } else{ rudolphPause(); } } r.rot=0; r.rv=0; r.p*=.92; })();
+  // Snowman (+6, 충돌→얼음 효과)
+  (function(){ if(inEscape() || holdAtTop) return; const hit = Math.hypot(ball.x-snow.x, ball.y-snow.y) < BALL_R+snow.body || Math.hypot(ball.x-snow.x, ball.y-(snow.y-36)) < BALL_R+snow.head; if(hit){ snow.p=1; score+=6; addPop(ball.x, ball.y-16, 6, C.blue); ping(snow.n,.18); burstHit(ball.x,ball.y,20,230); const dir = (ball.x < snow.x ? -1 : 1); snow.rv += (0.9 + snow.spin * 2.2) * dir; const dx = ball.x - snow.x; const dy = ball.y - snow.y; const dist = Math.hypot(dx, dy) || 1; const nx = dx / dist; const ny = dy / dist; const OUT_IMPULSE = 18; ball.vx += nx * OUT_IMPULSE; ball.vy += ny * OUT_IMPULSE * 0.4; ball.x += nx * 2; ball.y += ny * 2; iceUntil = nowSec() + ICE_DUR; for(let i=0;i<60;i++) spawnFlake(ball.x,ball.y,220,1.4); }
     const K = 8.0, Cc = 3.6; snow.rv += (-K * snow.rot - Cc * snow.rv) * dt; snow.rot += snow.rv * dt; const motion = Math.abs(snow.rv) + Math.abs(snow.rot)*0.6; if(motion > 0.015){ const emitR = Math.max(snow.body, snow.head) + 16; const spray = 10; for(let i=0;i<spray;i++){ const a = rnd(0,Math.PI*2); spawnFlake(snow.x, snow.y, 160, 1.0, { dirAng:a, startR:emitR, driftAcc:260 }); } } if(Math.abs(snow.rv) < 0.0008 && Math.abs(snow.rot) < 0.006){ snow.rv = 0; snow.rot = 0; } snow.p*=.92; })();
-  // Rollovers
-  roll.forEach(function(r){ if(inEscape() || holdAtTop) return; const dx=ball.x-r.x, dy=ball.y-r.y; if(!r.h && dx*dx+dy*dy<(BALL_R+14)*(BALL_R+14)){ r.h=true; score+=700; addPop(r.x, r.y-18, 700, C.gold); ping(r.n,.18); burstHit(r.x,r.y,18,200); setTimeout(function(){ r.h=false; },1500); } });
+  // Rollovers (+5)
+  roll.forEach(function(r){ if(inEscape() || holdAtTop) return; const dx=ball.x-r.x, dy=ball.y-r.y; if(!r.h && dx*dx+dy*dy<(BALL_R+14)*(BALL_R+14)){ r.h=true; score+=5; addPop(r.x, r.y-18, 5, C.gold); ping(r.n,.18); burstHit(r.x,r.y,18,200); setTimeout(function(){ r.h=false; },1500); } });
   // Stuck detect
   if(!holdAtTop){ const d=Math.hypot(ball.x-stuckOrigin.x, ball.y-stuckOrigin.y); if(d>STUCK_RADIUS){ stuckReset(false); } else if((nowSec()-stuckStartT)>=STUCK_TIME && !inEscape()){ startEscape(); } }
   // Trail
@@ -448,19 +466,21 @@ function draw(dt){
   // Trail quads
   for(let i=0;i<trail.length;i++){ const t=trail[i]; if(t.alpha<=0) continue; ctx.save(); ctx.globalAlpha=Math.min(t.alpha,TRAIL_ALPHA_MAX); const len=Math.max(12,t.sz*2.0), w=Math.max(2,t.sz*0.7); ctx.translate(t.x,t.y); ctx.rotate(t.ang); const gg=ctx.createLinearGradient(0,0,-len,0); gg.addColorStop(0,"rgba(255,255,255,0.38)"); gg.addColorStop(1,"rgba(255,215,102,0.00)"); ctx.fillStyle=gg; ctx.beginPath(); ctx.moveTo(0,0); ctx.quadraticCurveTo(-len*0.5, w, -len, 0); ctx.quadraticCurveTo(-len*0.5,-w, 0, 0); ctx.closePath(); ctx.fill(); ctx.restore(); }
 
-  /* ★ 점수 팝업 렌더 */
+  /* ★ 점수 팝업 렌더 (모바일 가시성 강화) */
   for(const p of pops){
     const k=Math.max(0,1-p.age/p.life);
+    const R = 18 * (p.baseScale||1);            // 원 배경 반지름
+    const fontPx = Math.round(20 * (p.baseScale||1)); // 글꼴 크기
     ctx.save();
     ctx.translate(p.x, p.y);
-    ctx.scale(p.scale, p.scale);
+    ctx.scale(p.scale, p.scale); // 애니메이션 스케일
     // 둥근 배경(살짝 어두운 그림자 느낌)
     ctx.globalAlpha=0.35*k;
     ctx.fillStyle="#000000";
-    ctx.beginPath(); ctx.arc(0,0,18,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(0,0,R,0,Math.PI*2); ctx.fill();
     // 숫자
     ctx.globalAlpha=0.95*k;
-    ctx.fillStyle=p.color; ctx.font="bold 20px ui-monospace,Menlo,Consolas";
+    ctx.fillStyle=p.color; ctx.font=`bold ${fontPx}px ui-monospace,Menlo,Consolas`;
     ctx.textAlign="center"; ctx.textBaseline="middle";
     ctx.fillText(p.text, 0, 0.5);
     ctx.restore();
